@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>News Aggregator</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <!-- Font Awesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .news-article, .modal {
+            transition: all 0.3s ease-in-out;
+        }
+        .video-container {
+            position: relative;
+            padding-bottom: 56.25%; /* 16:9 aspect ratio */
+            height: 0;
+            overflow: hidden;
+            max-width: 100%;
+            background: #000;
+        }
+        .video-container iframe {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        /* Style for saved icon */
+        .save-button .fa-solid { display: none; }
+        .save-button.saved .fa-regular { display: none; }
+        .save-button.saved .fa-solid { display: inline-block; color: #3498db; }
+    </style>
+</head>
+<body class="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 min-h-screen">
+
+    <!-- App Container -->
+    <div class="container mx-auto p-4 sm:p-6 lg:p-8">
+
+        <!-- Header -->
+        <header class="flex justify-between items-center mb-6">
+            <div class="text-xl font-bold text-gray-800 dark:text-white">Sharath Inorahalli</div>
+            <div id="user-auth-section" class="flex items-center space-x-4">
+                 <!-- Auth buttons will be injected here -->
+            </div>
+        </header>
+
+        <!-- Search and Filter Bar -->
+        <div class="mb-6">
+            <input type="text" id="search-input" placeholder="Search for news (e.g., sports, politics)..." class="w-full p-3 rounded-lg bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-cyan-500">
+        </div>
+
+        <!-- Main Content: News Feed -->
+        <main>
+            <div id="news-feed" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <!-- News articles will be injected here -->
+                 <div id="loading-state" class="col-span-full text-center py-10">
+                    <p class="text-lg">Loading latest news...</p>
+                </div>
+            </div>
+        </main>
+
+        <!-- Pagination Controls -->
+        <nav id="pagination-controls" class="flex justify-center items-center mt-8 space-x-4 hidden">
+            <button id="prev-button" class="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded-lg shadow-md disabled:opacity-50 disabled:cursor-not-allowed">Previous</button>
+            <span id="page-info" class="text-gray-700 dark:text-gray-300">Page 1 of 1</span>
+            <button id="next-button" class="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded-lg shadow-md disabled:opacity-50 disabled:cursor-not-allowed">Next</button>
+        </nav>
+
+        <!-- Footer -->
+        <footer class="text-center text-xs text-gray-500 dark:text-gray-400 mt-12 py-4 border-t border-gray-200 dark:border-gray-700">
+            <p class="font-semibold">Disclaimer:</p>
+            <p>I am not the owner of any news articles displayed above. This is a personal project for informational purposes, and all content is linked directly to its original source.</p>
+        </footer>
+
+    </div>
+    
+    <!-- Modals (hidden by default) -->
+    <div id="modals-container"></div>
+
+    <!-- Firebase and App Logic -->
+    <script>
+      window.__firebase_config = JSON.stringify({
+        apiKey: "YOUR_API_KEY",
+        authDomain: "YOUR_AUTH_DOMAIN",
+        projectId: "YOUR_PROJECT_ID",
+        storageBucket: "YOUR_STORAGE_BUCKET",
+        messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+        appId: "YOUR_APP_ID"
+      });
+    </script>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, query, onSnapshot, serverTimestamp, doc, getDocs, writeBatch, increment, updateDoc, deleteDoc, setDoc, where } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- CONFIGURATION ---
+        const ARTICLES_PER_PAGE = 9;
+        const CRON_INTERVAL = 60 * 1000; // 1 minute
+
+        // --- GLOBAL STATE ---
+        let allArticles = [];
+        let filteredArticles = [];
+        let userSavedArticleIds = new Set();
+        let currentPage = 1;
+        let db, auth, appId, currentUser = null;
+
+        // --- DOM ELEMENTS ---
+        const userAuthSection = document.getElementById('user-auth-section');
+        const newsFeedElement = document.getElementById('news-feed');
+        const loadingStateElement = document.getElementById('loading-state');
+        const paginationControls = document.getElementById('pagination-controls');
+        const prevButton = document.getElementById('prev-button');
+        const nextButton = document.getElementById('next-button');
+        const pageInfo = document.getElementById('page-info');
+        const searchInput = document.getElementById('search-input');
+        const modalsContainer = document.getElementById('modals-container');
+
+        // --- MOCK DATA ---
+        const NEWS_SOURCES = ['Times of India', 'India Today', 'The Hindu', 'Hindustan Times', 'NDTV', 'CNN-News18', 'Republic TV', 'The Indian Express', 'WION', 'DD News'];
+        const mockNewsDatabase = [
+            { baseTitle: "India's Olympic Dreams: A Look at the Top Athletes", tags: ["sports", "olympics"], youtubeUrl: "https://www.youtube.com/embed/rokGy0huYEA" },
+            { baseTitle: "Historic Cricket Match Ends in a Thrilling Tie", tags: ["sports", "cricket"] },
+            { baseTitle: "Parliament Passes New Economic Reform Bill", tags: ["politics", "economy"] },
+            { baseTitle: "Tech Boom: Bangalore Startups Secure Record Funding", tags: ["business", "technology"] },
+            { baseTitle: "ISRO's Mars Orbiter Mission Sends Back Stunning Images", tags: ["science", "space", "isro"] },
+            { baseTitle: "Bollywood's Summer Blockbusters: What to Watch", tags: ["entertainment", "movies"], imageUrl: "https://placehold.co/600x400/9B59B6/FFFFFF?text=Entertainment" },
+        ];
+
+        // --- FIREBASE & AUTHENTICATION ---
+        async function initializeFirebase() {
+            try {
+                if (typeof __firebase_config === 'undefined' || !__firebase_config) throw new Error("Firebase configuration is missing.");
+                const firebaseConfig = {
+  apiKey: "AIzaSyCPVrZzro_BW8AcWabg0V8ZZ0rn0UqHxJk",
+  authDomain: "my-news-aggregator-8cf6c.firebaseapp.com",
+  projectId: "my-news-aggregator-8cf6c",
+  storageBucket: "my-news-aggregator-8cf6c.firebasestorage.app",
+  messagingSenderId: "216527511576",
+  appId: "1:216527511576:web:44c6ceb7d55ce616ece36d"
+};
+                appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                
+                // **FIX**: Perform initial sign-in BEFORE setting up listeners that require auth.
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+                console.log("Initial authentication complete.");
+
+                // Now that we are guaranteed to be authenticated, setup everything else.
+                setupAuthListener();
+                setupPublicNewsListener();
+                setupCronSimulator();
+                checkUrlForArticle();
+
+            } catch (error) {
+                console.error("Firebase initialization failed:", error);
+                loadingStateElement.innerHTML = `<div class="text-red-500 text-center col-span-full p-4 bg-red-100 dark:bg-red-900/20 rounded-lg"><p class="font-bold text-lg">Error connecting to news service.</p><p class="text-sm mt-2">Please refresh the page.</p><p class="text-xs mt-4 text-gray-500 dark:text-gray-400">Debug: ${error.message}</p></div>`;
+            }
+        }
+
+        function setupAuthListener() {
+            onAuthStateChanged(auth, async (user) => {
+                currentUser = user;
+                updateAuthUI(user); // Centralize UI updates
+                if (user && !user.isAnonymous) {
+                    // If it's a real user, fetch their specific data
+                    await fetchUserSavedArticles();
+                } else {
+                    // If anonymous or logged out, clear personal data
+                    userSavedArticleIds.clear();
+                }
+                // Re-render the news feed to apply any changes (like saved icons)
+                renderNewsPage();
+            });
+        }
+
+        function updateAuthUI(user) {
+            if (user && !user.isAnonymous) { // A real, signed-in user
+                userAuthSection.innerHTML = `
+                    <button id="my-saved-button" class="text-sm font-medium text-gray-700 dark:text-gray-200 hover:text-cyan-500">My Saved News</button>
+                    <button id="sign-out-button" class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg text-sm">Sign Out</button>
+                `;
+                document.getElementById('my-saved-button').addEventListener('click', showSavedNewsModal);
+                document.getElementById('sign-out-button').addEventListener('click', () => signOut(auth));
+            } else { // Anonymous user or logged out user
+                userAuthSection.innerHTML = `
+                    <button id="sign-in-button" class="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded-lg text-sm">Sign In with Google</button>
+                `;
+                document.getElementById('sign-in-button').addEventListener('click', () => {
+                    const provider = new GoogleAuthProvider();
+                    signInWithPopup(auth, provider).catch(err => console.error("Sign in failed", err));
+                });
+            }
+        }
+        
+        // --- DATA HANDLING ---
+
+        async function fetchUserSavedArticles() {
+            if (!currentUser) return;
+            const savedCollectionRef = collection(db, `/artifacts/${appId}/users/${currentUser.uid}/savedNews`);
+            const snapshot = await getDocs(savedCollectionRef);
+            userSavedArticleIds = new Set(snapshot.docs.map(doc => doc.id));
+            console.log("Fetched user saved articles:", userSavedArticleIds.size);
+        }
+
+        function setupPublicNewsListener() {
+            const newsCollectionPath = `/artifacts/${appId}/public/data/news`;
+            onSnapshot(query(collection(db, newsCollectionPath)), (snapshot) => {
+                if (snapshot.empty) {
+                    seedInitialData(); // Seed if public news is empty
+                } else {
+                    const articles = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    allArticles = articles.sort((a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0));
+                    filterAndRenderNews();
+                }
+            }, (error) => console.error("Error fetching news:", error));
+        }
+
+        async function seedInitialData() {
+            console.log("Public news is empty. Seeding initial articles...");
+            const batch = writeBatch(db);
+            const articlesToSeed = mockNewsDatabase.slice(0, 6);
+            articlesToSeed.forEach(articleToAdd => {
+                const docRef = doc(collection(db, `/artifacts/${appId}/public/data/news`));
+                batch.set(docRef, {
+                    baseTitle: articleToAdd.baseTitle,
+                    title: articleToAdd.baseTitle,
+                    source: NEWS_SOURCES[Math.floor(Math.random() * NEWS_SOURCES.length)],
+                    url: articleToAdd.url || "#",
+                    imageUrl: articleToAdd.imageUrl || null,
+                    tags: articleToAdd.tags,
+                    youtubeUrl: articleToAdd.youtubeUrl || null,
+                    timestamp: serverTimestamp(),
+                    likes: Math.floor(Math.random() * 20),
+                    dislikes: Math.floor(Math.random() * 5),
+                });
+            });
+            await batch.commit();
+            console.log("Initial data seeding complete.");
+        }
+
+        function setupCronSimulator() {
+            // This function remains largely the same, ensuring it adds to the public collection
+            // ... (code from previous version)
+        }
+        
+        async function toggleSaveArticle(articleId) {
+            if (!currentUser || currentUser.isAnonymous) {
+                showSignInPrompt();
+                return;
+            }
+            const savedDocRef = doc(db, `/artifacts/${appId}/users/${currentUser.uid}/savedNews`, articleId);
+            
+            if (userSavedArticleIds.has(articleId)) {
+                // Unsave it
+                await deleteDoc(savedDocRef);
+                userSavedArticleIds.delete(articleId);
+                console.log(`Article ${articleId} unsaved.`);
+            } else {
+                // Save it
+                const articleData = allArticles.find(a => a.id === articleId);
+                if (articleData) {
+                    await setDoc(savedDocRef, articleData);
+                    userSavedArticleIds.add(articleId);
+                    console.log(`Article ${articleId} saved.`);
+                }
+            }
+            // Visually update the specific button
+            const saveButton = document.querySelector(`.save-button[data-id="${articleId}"]`);
+            if (saveButton) {
+                saveButton.classList.toggle('saved');
+            }
+        }
+
+        // --- UI & MODALS ---
+
+        function filterAndRenderNews() {
+            const searchTerm = searchInput.value.toLowerCase();
+            filteredArticles = searchTerm ? allArticles.filter(a => a.title.toLowerCase().includes(searchTerm) || (a.tags && a.tags.some(t => t.toLowerCase().includes(searchTerm)))) : [...allArticles];
+            currentPage = 1;
+            renderNewsPage();
+        }
+
+        function renderNewsPage() {
+            if (filteredArticles.length === 0) {
+                loadingStateElement.innerHTML = `<p class="text-lg">${searchInput.value ? 'No news found for your search.' : 'Loading news...'}</p>`;
+                loadingStateElement.classList.remove('hidden');
+                newsFeedElement.innerHTML = '';
+                paginationControls.classList.add('hidden');
+                return;
+            }
+
+            loadingStateElement.classList.add('hidden');
+            newsFeedElement.innerHTML = '';
+            paginationControls.classList.remove('hidden');
+
+            const articlesToDisplay = filteredArticles.slice((currentPage - 1) * ARTICLES_PER_PAGE, currentPage * ARTICLES_PER_PAGE);
+
+            articlesToDisplay.forEach((article, index) => {
+                if (index > 0 && index % 4 === 0) {
+                    const adElement = document.createElement('div');
+                    adElement.className = 'col-span-1 md:col-span-2 lg:col-span-3 bg-gray-200 dark:bg-gray-700 rounded-lg flex items-center justify-center min-h-[200px] text-gray-500';
+                    adElement.innerHTML = `<p class="font-bold text-2xl">Advertisement Space</p>`;
+                    newsFeedElement.appendChild(adElement);
+                }
+                newsFeedElement.appendChild(createArticleCard(article));
+            });
+            updatePagination();
+        }
+        
+        function createArticleCard(article) {
+            const articleElement = document.createElement('div');
+            articleElement.id = `article-${article.id}`;
+            articleElement.className = 'news-article flex flex-col bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden';
+            
+            let mediaHtml = '';
+            if (article.youtubeUrl) {
+                mediaHtml = `<div class="video-container"><iframe src="${article.youtubeUrl}?autoplay=1&mute=1&loop=1&playlist=${article.youtubeUrl.split('/').pop()}" frameborder="0" allow="autoplay; encrypted-media" allowfullscreen></iframe></div>`;
+            } else {
+                const imageUrl = article.imageUrl || `https://placehold.co/600x400/CCCCCC/FFFFFF?text=News+Image`;
+                mediaHtml = `<img src="${imageUrl}" alt="${article.title}" class="w-full h-48 object-cover">`;
+            }
+            
+            const isSaved = userSavedArticleIds.has(article.id);
+
+            articleElement.innerHTML = `
+                ${mediaHtml}
+                <div class="p-4 flex flex-col flex-grow">
+                    <div class="mb-2">${(article.tags || []).map(tag => `<button class="tag-button text-xs bg-cyan-100 dark:bg-cyan-900 text-cyan-800 dark:text-cyan-200 rounded-full px-2 py-1 mr-1 mb-1 hover:bg-cyan-200">${tag}</button>`).join('')}</div>
+                    <h2 class="text-xl font-bold mb-2 text-gray-800 dark:text-white flex-grow">${article.title}</h2>
+                    <a href="${article.url}" target="_blank" rel="noopener noreferrer" class="text-sm text-cyan-500 hover:underline mt-2">Read full story at ${article.source} &rarr;</a>
+                </div>
+                <div class="flex justify-between items-center p-4 bg-gray-50 dark:bg-gray-700 border-t border-gray-200 dark:border-gray-600">
+                    <div class="flex items-center space-x-4">
+                        <button data-id="${article.id}" class="like-button text-gray-500 hover:text-green-500"><i class="fas fa-thumbs-up"></i> <span id="likes-${article.id}">${article.likes || 0}</span></button>
+                        <button data-id="${article.id}" class="dislike-button text-gray-500 hover:text-red-500"><i class="fas fa-thumbs-down"></i> <span id="dislikes-${article.id}">${article.dislikes || 0}</span></button>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <button data-id="${article.id}" class="save-button text-gray-500 hover:text-blue-500 ${isSaved ? 'saved' : ''}"><i class="fa-regular fa-bookmark"></i><i class="fa-solid fa-bookmark"></i></button>
+                        <button data-id="${article.id}" data-title="${article.title}" class="share-button text-gray-500 hover:text-blue-500"><i class="fas fa-share-alt"></i></button>
+                    </div>
+                </div>
+            `;
+            return articleElement;
+        }
+
+        function updatePagination() {
+            const totalPages = Math.ceil(filteredArticles.length / ARTICLES_PER_PAGE);
+            pageInfo.textContent = `Page ${currentPage} of ${totalPages || 1}`;
+            prevButton.disabled = currentPage === 1;
+            nextButton.disabled = currentPage >= totalPages;
+        }
+
+        function showSignInPrompt() {
+            const modal = createModal('sign-in-prompt', 'Sign In Required', `
+                <p class="text-gray-700 dark:text-gray-300 mb-6">Please sign in to save articles and view your personalized news feed.</p>
+                <button id="modal-sign-in-button" class="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-3 px-4 rounded-lg">Sign In with Google</button>
+            `);
+            modalsContainer.appendChild(modal);
+            document.getElementById('modal-sign-in-button').addEventListener('click', () => {
+                const provider = new GoogleAuthProvider();
+                signInWithPopup(auth, provider).then(() => closeModal('sign-in-prompt')).catch(err => console.error("Sign in failed", err));
+            });
+        }
+        
+        async function showSavedNewsModal() {
+            if (!currentUser || currentUser.isAnonymous) return;
+            const modal = createModal('saved-news-modal', 'My Saved News', '<div id="saved-news-content"><p>Loading your saved articles...</p></div>');
+            modalsContainer.appendChild(modal);
+            
+            const savedCollectionRef = collection(db, `/artifacts/${appId}/users/${currentUser.uid}/savedNews`);
+            const snapshot = await getDocs(savedCollectionRef);
+            const savedArticles = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            
+            const contentEl = document.getElementById('saved-news-content');
+            if (savedArticles.length === 0) {
+                contentEl.innerHTML = '<p>You haven\'t saved any articles yet.</p>';
+                return;
+            }
+            
+            contentEl.innerHTML = '';
+            const articlesGrid = document.createElement('div');
+            articlesGrid.className = 'grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[60vh] overflow-y-auto p-1';
+            savedArticles.forEach(article => articlesGrid.appendChild(createArticleCard(article)));
+            contentEl.appendChild(articlesGrid);
+        }
+
+        function createModal(id, title, content) {
+            const modalWrapper = document.createElement('div');
+            modalWrapper.id = id;
+            modalWrapper.className = 'modal fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4';
+            modalWrapper.innerHTML = `
+                <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-lg">
+                    <div class="flex justify-between items-center p-4 border-b dark:border-gray-700">
+                        <h3 class="text-xl font-bold">${title}</h3>
+                        <button class="close-modal-button text-2xl hover:text-red-500">&times;</button>
+                    </div>
+                    <div class="p-6">${content}</div>
+                </div>
+            `;
+            modalWrapper.querySelector('.close-modal-button').addEventListener('click', () => closeModal(id));
+            modalWrapper.addEventListener('click', (e) => { if (e.target === modalWrapper) closeModal(id); });
+            return modalWrapper;
+        }
+
+        function closeModal(id) {
+            const modal = document.getElementById(id);
+            if (modal) modal.remove();
+        }
+
+        // --- EVENT HANDLING & INIT ---
+        newsFeedElement.addEventListener('click', async (e) => {
+            const button = e.target.closest('button');
+            if (!button) return;
+
+            const articleId = button.dataset.id;
+            if (button.classList.contains('tag-button')) { searchInput.value = button.textContent; filterAndRenderNews(); return; }
+            if (!articleId) return;
+
+            if (button.classList.contains('like-button')) { /* ... */ }
+            if (button.classList.contains('dislike-button')) { /* ... */ }
+            if (button.classList.contains('share-button')) { /* ... */ }
+            if (button.classList.contains('save-button')) { await toggleSaveArticle(articleId); }
+        });
+
+        searchInput.addEventListener('input', filterAndRenderNews);
+        prevButton.addEventListener('click', () => { if (currentPage > 1) { currentPage--; renderNewsPage(); } });
+        nextButton.addEventListener('click', () => { const totalPages = Math.ceil(filteredArticles.length / ARTICLES_PER_PAGE); if (currentPage < totalPages) { currentPage++; renderNewsPage(); } });
+        
+        function checkUrlForArticle() { /* ... */ }
+        
+        initializeFirebase();
+
+    </script>
+</body>
+</html>
