@@ -140,13 +140,13 @@
             try {
                 if (typeof __firebase_config === 'undefined' || !__firebase_config) throw new Error("Firebase configuration is missing.");
                 const firebaseConfig = {
-  apiKey: "AIzaSyCPVrZzro_BW8AcWabg0V8ZZ0rn0UqHxJk",
-  authDomain: "my-news-aggregator-8cf6c.firebaseapp.com",
-  projectId: "my-news-aggregator-8cf6c",
-  storageBucket: "my-news-aggregator-8cf6c.firebasestorage.app",
-  messagingSenderId: "216527511576",
-  appId: "1:216527511576:web:44c6ceb7d55ce616ece36d"
-};
+                apiKey: "AIzaSyCPVrZzro_BW8AcWabg0V8ZZ0rn0UqHxJk",
+                authDomain: "my-news-aggregator-8cf6c.firebaseapp.com",
+                projectId: "my-news-aggregator-8cf6c",
+                storageBucket: "my-news-aggregator-8cf6c.firebasestorage.app",
+                messagingSenderId: "216527511576",
+                appId: "1:216527511576:web:44c6ceb7d55ce616ece36d"
+                                    };
                 appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
